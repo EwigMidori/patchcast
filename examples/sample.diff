@@ -1,0 +1,34 @@
+diff --git a/src/auth.rs b/src/auth.rs
+index 1234567..abcdefg 100644
+--- a/src/auth.rs
++++ b/src/auth.rs
+@@ -15,8 +15,12 @@ pub struct AuthConfig {
+     pub secret_key: String,
+     pub token_expiry: u64,
++    pub refresh_enabled: bool,
++    pub max_sessions: usize,
+ }
+
+-pub fn validate_token(token: &str) -> bool {
+-    token.len() > 0
++pub fn validate_token(token: &str, config: &AuthConfig) -> Result<Claims, AuthError> {
++    if token.is_empty() {
++        return Err(AuthError::EmptyToken);
++    }
++    decode_and_verify(token, &config.secret_key)
+ }
+diff --git a/src/api/routes.rs b/src/api/routes.rs
+index 2345678..bcdefgh 100644
+--- a/src/api/routes.rs
++++ b/src/api/routes.rs
+@@ -1,5 +1,6 @@
+ use crate::auth;
++use crate::middleware::RateLimit;
+
+-pub fn setup_routes(app: &mut App) {
++pub fn setup_routes(app: &mut App, rate_limit: RateLimit) {
+     app.get("/health", health_check);
+-    app.post("/login", auth::login);
++    app.post("/login", rate_limit.wrap(auth::login));
++    app.post("/refresh", rate_limit.wrap(auth::refresh_token));
+ }

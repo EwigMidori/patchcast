@@ -1,0 +1,20 @@
+[package]
+name = "patchcast"
+version = "0.1.0"
+edition = "2021"
+description = "Turn any git diff into an animated code walkthrough video"
+license = "MIT"
+repository = "https://github.com/LakshmiSravyaVedantham/patchcast"
+keywords = ["git", "diff", "video", "code-review", "visualization"]
+categories = ["multimedia::video", "command-line-utilities", "development-tools"]
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+image = "0.25"
+syntect = "5"
+git2 = "0.19"
+tempfile = "3"
+anyhow = "1"
+indicatif = "0.17"
+regex = "1"
+glob-match = "0.2"

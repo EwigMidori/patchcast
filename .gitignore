@@ -1,0 +1,6 @@
+/target
+*.mp4
+*.avi
+*.mov
+examples/output/*.mp4
+.DS_Store
