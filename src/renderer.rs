@@ -5,17 +5,20 @@
 use anyhow::{bail, Context, Result};
 use image::{ImageBuffer, Rgba, RgbaImage};
 use indicatif::{ProgressBar, ProgressStyle};
+use std::fs;
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use crate::animation::{
     crossfade, fade_in_alpha, lines_revealed, pulse_highlight, scene_progress, slide_in_offset,
 };
 use crate::diff_parser::DiffLineKind;
+use crate::font;
 use crate::highlighter::HighlightedLine;
 use crate::scene::{change_summary, language_name, Scene, SceneKind, SceneLine};
 use crate::style::{Color, Layout, Theme};
+use ab_glyph::FontRef;
 
 /// Rendering configuration.
 pub struct RenderConfig {
@@ -36,20 +39,26 @@ impl Default for RenderConfig {
     }
 }
 
-/// Render all scenes to an MP4 file using ffmpeg.
+/// Render each scene to its own MP4. `output_path` is treated as a directory
+/// (a `.mp4` suffix is stripped). Transitions are skipped.
 pub fn render_to_video(
     scenes: &[Scene],
     output_path: &Path,
     config: &RenderConfig,
-) -> Result<()> {
+) -> Result<Vec<PathBuf>> {
     let theme = Theme::default();
     let layout = Layout::new(config.font_size);
+    let font = font::load_font();
 
-    // Calculate total frames for progress bar.
-    let total_frames: u32 = scenes.iter().map(|s| s.duration_frames).sum();
+    let clips: Vec<&Scene> = scenes.iter().filter(|s| !s.is_transition()).collect();
+    let total_frames: u32 = clips.iter().map(|s| s.duration_frames).sum();
     if total_frames == 0 {
         bail!("No frames to render — the diff may be empty");
     }
+
+    let out_dir = output_dir(output_path);
+    fs::create_dir_all(&out_dir)
+        .with_context(|| format!("Failed to create {}", out_dir.display()))?;
 
     let pb = ProgressBar::new(total_frames as u64);
     pb.set_style(
@@ -59,8 +68,27 @@ pub fn render_to_video(
             .progress_chars("##-"),
     );
 
-    // Spawn ffmpeg process.
-    let mut ffmpeg = Command::new("ffmpeg")
+    let mut written = Vec::new();
+    for (i, scene) in clips.iter().enumerate() {
+        let clip_path = out_dir.join(format!("{:02}-{}.mp4", i + 1, scene.clip_stem()));
+        encode_scene(scene, &clip_path, config, &theme, &layout, &font, &pb)?;
+        written.push(clip_path);
+    }
+
+    pb.finish_with_message("Encoding complete");
+    Ok(written)
+}
+
+fn output_dir(output_path: &Path) -> PathBuf {
+    if output_path.extension().is_some_and(|e| e == "mp4") {
+        output_path.with_extension("")
+    } else {
+        output_path.to_path_buf()
+    }
+}
+
+fn spawn_ffmpeg(output_path: &Path, config: &RenderConfig) -> Result<std::process::Child> {
+    Command::new("ffmpeg")
         .args([
             "-y",
             "-f", "rawvideo",
@@ -79,17 +107,24 @@ pub fn render_to_video(
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
-        .context("Failed to spawn ffmpeg. Is ffmpeg installed and in PATH?")?;
+        .context("Failed to spawn ffmpeg. Is ffmpeg installed and in PATH?")
+}
 
-    let stdin = ffmpeg
-        .stdin
-        .as_mut()
-        .context("Failed to open ffmpeg stdin")?;
-
-    // Keep a reference to the previous scene's last frame for crossfade.
-    let mut prev_frame: Option<RgbaImage> = None;
-
-    for scene in scenes {
+fn encode_scene(
+    scene: &Scene,
+    clip_path: &Path,
+    config: &RenderConfig,
+    theme: &Theme,
+    layout: &Layout,
+    font: &FontRef<'static>,
+    pb: &ProgressBar,
+) -> Result<()> {
+    let mut ffmpeg = spawn_ffmpeg(clip_path, config)?;
+    {
+        let stdin = ffmpeg
+            .stdin
+            .as_mut()
+            .context("Failed to open ffmpeg stdin")?;
         for frame_idx in 0..scene.duration_frames {
             let frame = render_frame(
                 &scene.kind,
@@ -97,32 +132,21 @@ pub fn render_to_video(
                 scene.duration_frames,
                 config.width,
                 config.height,
-                &theme,
-                &layout,
-                &prev_frame,
+                theme,
+                layout,
+                font,
+                &None,
             );
-
             stdin
                 .write_all(frame.as_raw())
                 .context("Failed to write frame to ffmpeg")?;
-
             pb.inc(1);
-
-            // Store last frame for potential crossfade.
-            if frame_idx == scene.duration_frames.saturating_sub(1) {
-                prev_frame = Some(frame);
-            }
         }
     }
-
-    drop(ffmpeg.stdin.take());
     let status = ffmpeg.wait().context("ffmpeg process failed")?;
-    pb.finish_with_message("Encoding complete");
-
     if !status.success() {
-        bail!("ffmpeg exited with status: {}", status);
+        bail!("ffmpeg exited with status: {} ({})", status, clip_path.display());
     }
-
     Ok(())
 }
 
@@ -135,6 +159,7 @@ fn render_frame(
     height: u32,
     theme: &Theme,
     layout: &Layout,
+    font: &FontRef<'static>,
     prev_frame: &Option<RgbaImage>,
 ) -> RgbaImage {
     match scene_kind {
@@ -150,6 +175,7 @@ fn render_frame(
             height,
             theme,
             layout,
+            font,
             filename,
             *lines_added,
             *lines_removed,
@@ -166,6 +192,7 @@ fn render_frame(
             height,
             theme,
             layout,
+            font,
             filename,
             lines,
         ),
@@ -180,6 +207,7 @@ fn render_frame(
             height,
             theme,
             layout,
+            font,
             filename,
             lines,
             deletion_indices,
@@ -195,6 +223,7 @@ fn render_frame(
             height,
             theme,
             layout,
+            font,
             filename,
             lines,
             addition_indices,
@@ -202,7 +231,7 @@ fn render_frame(
         SceneKind::Pause {
             filename,
             lines,
-        } => render_static_code(width, height, theme, layout, filename, lines),
+        } => render_static_code(width, height, theme, layout, font, filename, lines),
         SceneKind::Transition => {
             render_transition(frame, total_frames, width, height, theme, prev_frame)
         }
@@ -250,37 +279,10 @@ fn blend_pixel(img: &mut RgbaImage, x: u32, y: u32, color: Color) {
     img.put_pixel(x, y, Rgba([r, g, b, 255]));
 }
 
-/// Draw a character block (monospace grid cell).
-fn draw_char_block(
-    img: &mut RgbaImage,
-    x: u32,
-    y: u32,
-    _ch: char,
-    fg: Color,
-    char_w: u32,
-    char_h: u32,
-) {
-    // We render each character as a smaller filled block within the cell,
-    // giving a clean monospace terminal appearance.
-    let inner_w = char_w.saturating_sub(1).max(1);
-    let inner_h = char_h.saturating_sub(2).max(1);
-    let offset_x = (char_w - inner_w) / 2;
-    let offset_y = (char_h - inner_h) / 2;
-
-    for dy in 0..inner_h {
-        for dx in 0..inner_w {
-            let px = x + offset_x + dx;
-            let py = y + offset_y + dy;
-            if px < img.width() && py < img.height() {
-                blend_pixel(img, px, py, fg);
-            }
-        }
-    }
-}
-
 /// Draw a string of styled characters.
 fn draw_styled_line(
     img: &mut RgbaImage,
+    font: &FontRef<'static>,
     x_start: u32,
     y: u32,
     line: &HighlightedLine,
@@ -290,7 +292,6 @@ fn draw_styled_line(
     let mut x = x_start;
     for sc in &line.chars {
         if sc.ch == ' ' || sc.ch == '\t' {
-            // Skip spaces — they're just empty cells.
             if sc.ch == '\t' {
                 x += layout.char_width * 4;
             } else {
@@ -302,7 +303,7 @@ fn draw_styled_line(
         if alpha_mult < 1.0 {
             fg.a = (fg.a as f32 * alpha_mult) as u8;
         }
-        draw_char_block(img, x, y, sc.ch, fg, layout.char_width, layout.char_height);
+        font::draw_glyph(img, font, x, y, sc.ch, fg, layout.char_height);
         x += layout.char_width;
     }
 }
@@ -310,6 +311,7 @@ fn draw_styled_line(
 /// Draw plain text (not syntax highlighted).
 fn draw_plain_text(
     img: &mut RgbaImage,
+    font: &FontRef<'static>,
     x_start: u32,
     y: u32,
     text: &str,
@@ -317,12 +319,13 @@ fn draw_plain_text(
     layout: &Layout,
 ) {
     let line = HighlightedLine::plain(text, color);
-    draw_styled_line(img, x_start, y, &line, layout, 1.0);
+    draw_styled_line(img, font, x_start, y, &line, layout, 1.0);
 }
 
 /// Draw the file header bar at the top.
 fn draw_header(
     img: &mut RgbaImage,
+    font: &FontRef<'static>,
     filename: &str,
     theme: &Theme,
     layout: &Layout,
@@ -330,12 +333,13 @@ fn draw_header(
     let w = img.width();
     draw_rect(img, 0, 0, w, layout.header_height, theme.header_bg);
     let text_y = (layout.header_height - layout.char_height) / 2;
-    draw_plain_text(img, layout.left_margin, text_y, filename, theme.header_text, layout);
+    draw_plain_text(img, font, layout.left_margin, text_y, filename, theme.header_text, layout);
 }
 
 /// Draw line numbers in the gutter.
 fn draw_line_number(
     img: &mut RgbaImage,
+    font: &FontRef<'static>,
     y: u32,
     line_num: u32,
     theme: &Theme,
@@ -343,7 +347,7 @@ fn draw_line_number(
 ) {
     let num_str = format!("{:>4}", line_num);
     let x = layout.left_margin;
-    draw_plain_text(img, x, y, &num_str, theme.line_number, layout);
+    draw_plain_text(img, font, x, y, &num_str, theme.line_number, layout);
 }
 
 /// Draw the diff border indicator (green for added, red for removed).
@@ -372,6 +376,7 @@ fn render_title_card(
     height: u32,
     theme: &Theme,
     layout: &Layout,
+    font: &FontRef<'static>,
     filename: &str,
     lines_added: u32,
     lines_removed: u32,
@@ -392,21 +397,21 @@ fn render_title_card(
     let filename_y = center_y.saturating_sub(layout.char_height * 2);
     let mut title_color = theme.title_accent;
     title_color.a = (255.0 * alpha) as u8;
-    draw_plain_text(&mut img, filename_x, filename_y, filename, title_color, layout);
+    draw_plain_text(&mut img, font, filename_x, filename_y, filename, title_color, layout);
 
     // Draw language name.
     let lang_x = (width / 2).saturating_sub((lang.len() as u32 * layout.char_width) / 2);
     let lang_y = center_y;
     let mut lang_color = theme.text_dim;
     lang_color.a = (255.0 * alpha) as u8;
-    draw_plain_text(&mut img, lang_x, lang_y, lang, lang_color, layout);
+    draw_plain_text(&mut img, font, lang_x, lang_y, lang, lang_color, layout);
 
     // Draw change summary.
     let summary_x = (width / 2).saturating_sub((summary.len() as u32 * layout.char_width) / 2);
     let summary_y = center_y + layout.char_height * 2;
     let mut summary_color = theme.text;
     summary_color.a = (255.0 * alpha) as u8;
-    draw_plain_text(&mut img, summary_x, summary_y, &summary, summary_color, layout);
+    draw_plain_text(&mut img, font, summary_x, summary_y, &summary, summary_color, layout);
 
     img
 }
@@ -419,12 +424,13 @@ fn render_code_reveal(
     height: u32,
     theme: &Theme,
     layout: &Layout,
+    font: &FontRef<'static>,
     filename: &str,
     lines: &[SceneLine],
 ) -> RgbaImage {
     let mut img = ImageBuffer::new(width, height);
     fill_background(&mut img, theme.background);
-    draw_header(&mut img, filename, theme, layout);
+    draw_header(&mut img, font, filename, theme, layout);
 
     let visible = lines_revealed(frame, total_frames, lines.len());
     let code_y_start = layout.header_height + layout.top_margin;
@@ -438,9 +444,9 @@ fn render_code_reveal(
             break;
         }
 
-        draw_line_number(&mut img, y, line.line_number, theme, layout);
+        draw_line_number(&mut img, font, y, line.line_number, theme, layout);
         draw_diff_border(&mut img, y, layout.line_height(), &line.kind, theme, layout);
-        draw_styled_line(&mut img, layout.code_x_start(), y, &line.highlighted, layout, 1.0);
+        draw_styled_line(&mut img, font, layout.code_x_start(), y, &line.highlighted, layout, 1.0);
     }
 
     img
@@ -454,13 +460,14 @@ fn render_deletion_highlight(
     height: u32,
     theme: &Theme,
     layout: &Layout,
+    font: &FontRef<'static>,
     filename: &str,
     lines: &[SceneLine],
     deletion_indices: &[usize],
 ) -> RgbaImage {
     let mut img = ImageBuffer::new(width, height);
     fill_background(&mut img, theme.background);
-    draw_header(&mut img, filename, theme, layout);
+    draw_header(&mut img, font, filename, theme, layout);
 
     let pulse_alpha = pulse_highlight(frame, total_frames, 0.2, 0.6);
     let code_y_start = layout.header_height + layout.top_margin;
@@ -484,9 +491,9 @@ fn render_deletion_highlight(
             draw_rect(&mut img, layout.left_margin, y, width - layout.left_margin * 2, layout.line_height(), bg);
         }
 
-        draw_line_number(&mut img, y, line.line_number, theme, layout);
+        draw_line_number(&mut img, font, y, line.line_number, theme, layout);
         draw_diff_border(&mut img, y, layout.line_height(), &line.kind, theme, layout);
-        draw_styled_line(&mut img, layout.code_x_start(), y, &line.highlighted, layout, 1.0);
+        draw_styled_line(&mut img, font, layout.code_x_start(), y, &line.highlighted, layout, 1.0);
     }
 
     img
@@ -500,13 +507,14 @@ fn render_addition_highlight(
     height: u32,
     theme: &Theme,
     layout: &Layout,
+    font: &FontRef<'static>,
     filename: &str,
     lines: &[SceneLine],
     addition_indices: &[usize],
 ) -> RgbaImage {
     let mut img = ImageBuffer::new(width, height);
     fill_background(&mut img, theme.background);
-    draw_header(&mut img, filename, theme, layout);
+    draw_header(&mut img, font, filename, theme, layout);
 
     let progress = scene_progress(frame, total_frames);
     let slide_offset = slide_in_offset(frame, total_frames, 50.0) as u32;
@@ -538,10 +546,11 @@ fn render_addition_highlight(
             draw_rect(&mut img, layout.left_margin + x_offset, y, width - layout.left_margin * 2, layout.line_height(), bg);
         }
 
-        draw_line_number(&mut img, y, line.line_number, theme, layout);
+        draw_line_number(&mut img, font, y, line.line_number, theme, layout);
         draw_diff_border(&mut img, y, layout.line_height(), &line.kind, theme, layout);
         draw_styled_line(
             &mut img,
+            font,
             layout.code_x_start() + x_offset,
             y,
             &line.highlighted,
@@ -559,12 +568,13 @@ fn render_static_code(
     height: u32,
     theme: &Theme,
     layout: &Layout,
+    font: &FontRef<'static>,
     filename: &str,
     lines: &[SceneLine],
 ) -> RgbaImage {
     let mut img = ImageBuffer::new(width, height);
     fill_background(&mut img, theme.background);
-    draw_header(&mut img, filename, theme, layout);
+    draw_header(&mut img, font, filename, theme, layout);
 
     let code_y_start = layout.header_height + layout.top_margin;
 
@@ -574,9 +584,9 @@ fn render_static_code(
             break;
         }
 
-        draw_line_number(&mut img, y, line.line_number, theme, layout);
+        draw_line_number(&mut img, font, y, line.line_number, theme, layout);
         draw_diff_border(&mut img, y, layout.line_height(), &line.kind, theme, layout);
-        draw_styled_line(&mut img, layout.code_x_start(), y, &line.highlighted, layout, 1.0);
+        draw_styled_line(&mut img, font, layout.code_x_start(), y, &line.highlighted, layout, 1.0);
     }
 
     img
@@ -705,8 +715,9 @@ mod tests {
     fn test_title_card_renders() {
         let theme = Theme::default();
         let layout = Layout::new(14);
+        let font = font::load_font();
         let img = render_title_card(
-            15, 30, 640, 480, &theme, &layout,
+            15, 30, 640, 480, &theme, &layout, &font,
             "src/main.rs", 5, 2, "rs",
         );
         assert_eq!(img.width(), 640);
@@ -724,7 +735,8 @@ mod tests {
                 line_number: 1,
             },
         ];
-        let img = render_static_code(640, 480, &theme, &layout, "test.rs", &lines);
+        let font = font::load_font();
+        let img = render_static_code(640, 480, &theme, &layout, &font, "test.rs", &lines);
         assert_eq!(img.width(), 640);
         assert_eq!(img.height(), 480);
     }

@@ -6,6 +6,7 @@
 
 pub mod animation;
 pub mod diff_parser;
+pub mod font;
 pub mod highlighter;
 pub mod renderer;
 pub mod scene;

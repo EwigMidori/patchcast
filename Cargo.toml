@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 description = "Turn any git diff into an animated code walkthrough video"
 license = "MIT"
-repository = "https://github.com/LakshmiSravyaVedantham/patchcast"
+repository = "https://github.com/EwigMidori/patchcast"
 keywords = ["git", "diff", "video", "code-review", "visualization"]
 categories = ["multimedia::video", "command-line-utilities", "development-tools"]
 
@@ -18,3 +18,4 @@ anyhow = "1"
 indicatif = "0.17"
 regex = "1"
 glob-match = "0.2"
+ab_glyph = "0.2"

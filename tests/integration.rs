@@ -57,9 +57,7 @@ fn test_full_pipeline() {
 }
 
 /// Verify scene count for a two-file diff.
-/// Expected: file1(title + reveal + deletion + addition + pause)
-///         + transition
-///         + file2(title + reveal + deletion + addition + pause)
+/// Each file: title + reveal + deletion + addition + pause. No inter-file stitch.
 #[test]
 fn test_scene_count_two_files() {
     let parsed = parse_diff(SAMPLE_DIFF).unwrap();
@@ -67,11 +65,14 @@ fn test_scene_count_two_files() {
     let config = SceneConfig::default();
     let scenes = generate_scenes(&parsed.files, &highlighter, &config).unwrap();
 
-    // 5 scenes per file + 1 transition = 11 scenes.
     assert!(
-        scenes.len() >= 9,
-        "Expected at least 9 scenes for 2 files, got {}",
+        scenes.len() >= 8,
+        "Expected at least 8 scenes for 2 files, got {}",
         scenes.len()
+    );
+    assert!(
+        scenes.iter().all(|s| !s.is_transition()),
+        "clips stay separate; no transition scenes"
     );
 }
 

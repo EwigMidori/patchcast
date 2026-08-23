@@ -25,8 +25,8 @@ struct Cli {
     #[arg(long, conflicts_with = "diff")]
     file: Option<PathBuf>,
 
-    /// Output video file path.
-    #[arg(short, long, default_value = "output.mp4")]
+    /// Output directory for per-scene clips (a `.mp4` suffix is stripped).
+    #[arg(short, long, default_value = "output")]
     output: PathBuf,
 
     /// Syntect theme name for syntax highlighting.
@@ -153,10 +153,13 @@ fn main() -> Result<()> {
         font_size: cli.font_size,
     };
 
-    render_to_video(&scenes, &cli.output, &render_config)?;
+    let clips = render_to_video(&scenes, &cli.output, &render_config)?;
 
     println!();
-    println!("  Video saved to: {}", cli.output.display());
+    println!("  {} clip(s):", clips.len());
+    for path in &clips {
+        println!("    {}", path.display());
+    }
     println!();
 
     Ok(())

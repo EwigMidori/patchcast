@@ -62,6 +62,29 @@ pub struct Scene {
     pub duration_frames: u32,
 }
 
+impl Scene {
+    /// File stem for a standalone clip, e.g. `title-kernel_src_lib.rs`.
+    pub fn clip_stem(&self) -> String {
+        let (kind, file) = match &self.kind {
+            SceneKind::TitleCard { filename, .. } => ("title", filename.as_str()),
+            SceneKind::CodeReveal { filename, .. } => ("reveal", filename.as_str()),
+            SceneKind::DeletionHighlight { filename, .. } => ("deletion", filename.as_str()),
+            SceneKind::AdditionHighlight { filename, .. } => ("addition", filename.as_str()),
+            SceneKind::Pause { filename, .. } => ("pause", filename.as_str()),
+            SceneKind::Transition => return "transition".to_string(),
+        };
+        format!("{kind}-{}", sanitize_filename(file))
+    }
+
+    pub fn is_transition(&self) -> bool {
+        matches!(self.kind, SceneKind::Transition)
+    }
+}
+
+fn sanitize_filename(name: &str) -> String {
+    name.replace(['/', '\\', ' '], "_")
+}
+
 /// Configuration for scene generation.
 pub struct SceneConfig {
     pub fps: u32,
@@ -99,17 +122,8 @@ pub fn generate_scenes(
 ) -> Result<Vec<Scene>> {
     let mut scenes = Vec::new();
 
-    for (i, file) in files.iter().enumerate() {
-        let file_scenes = generate_file_scenes(file, highlighter, config)?;
-        scenes.extend(file_scenes);
-
-        // Add transition between files (not after the last one).
-        if i + 1 < files.len() {
-            scenes.push(Scene {
-                kind: SceneKind::Transition,
-                duration_frames: config.frames(config.transition_duration_secs),
-            });
-        }
+    for file in files {
+        scenes.extend(generate_file_scenes(file, highlighter, config)?);
     }
 
     Ok(scenes)
@@ -386,7 +400,7 @@ index 1234567..abcdefg 100644
     }
 
     #[test]
-    fn test_multi_file_has_transitions() {
+    fn test_multi_file_has_no_transitions() {
         let multi_diff = r#"diff --git a/a.rs b/a.rs
 --- a/a.rs
 +++ b/a.rs
@@ -405,13 +419,9 @@ diff --git a/b.rs b/b.rs
         let config = SceneConfig::default();
         let scenes = generate_scenes(&parsed.files, &highlighter, &config).unwrap();
 
-        let transition_count = scenes
-            .iter()
-            .filter(|s| matches!(s.kind, SceneKind::Transition))
-            .count();
-        assert_eq!(
-            transition_count, 1,
-            "Should have exactly one transition between two files"
+        assert!(
+            scenes.iter().all(|s| !s.is_transition()),
+            "each file stays its own clip; no crossfade between files"
         );
     }
 }
