@@ -72,7 +72,7 @@ fn test_scene_count_two_files() {
     );
     assert!(
         scenes.iter().all(|s| !s.is_transition()),
-        "clips stay separate; no transition scenes"
+        "no file-to-file transition scenes"
     );
 }
 

@@ -16,4 +16,4 @@ pub mod style;
 pub use diff_parser::{parse_diff, parse_diff_file, generate_git_diff, ParsedDiff, FileDiff};
 pub use highlighter::Highlighter;
 pub use renderer::{render_to_video, check_ffmpeg, RenderConfig};
-pub use scene::{generate_scenes, total_frames, Scene, SceneConfig};
+pub use scene::{generate_scenes, group_scenes_by_file, total_frames, Scene, SceneConfig};

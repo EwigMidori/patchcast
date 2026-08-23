@@ -63,17 +63,16 @@ pub struct Scene {
 }
 
 impl Scene {
-    /// File stem for a standalone clip, e.g. `title-kernel_src_lib.rs`.
-    pub fn clip_stem(&self) -> String {
-        let (kind, file) = match &self.kind {
-            SceneKind::TitleCard { filename, .. } => ("title", filename.as_str()),
-            SceneKind::CodeReveal { filename, .. } => ("reveal", filename.as_str()),
-            SceneKind::DeletionHighlight { filename, .. } => ("deletion", filename.as_str()),
-            SceneKind::AdditionHighlight { filename, .. } => ("addition", filename.as_str()),
-            SceneKind::Pause { filename, .. } => ("pause", filename.as_str()),
-            SceneKind::Transition => return "transition".to_string(),
-        };
-        format!("{kind}-{}", sanitize_filename(file))
+    /// Source path this scene belongs to, if any.
+    pub fn source_file(&self) -> Option<&str> {
+        match &self.kind {
+            SceneKind::TitleCard { filename, .. }
+            | SceneKind::CodeReveal { filename, .. }
+            | SceneKind::DeletionHighlight { filename, .. }
+            | SceneKind::AdditionHighlight { filename, .. }
+            | SceneKind::Pause { filename, .. } => Some(filename.as_str()),
+            SceneKind::Transition => None,
+        }
     }
 
     pub fn is_transition(&self) -> bool {
@@ -81,7 +80,22 @@ impl Scene {
     }
 }
 
-fn sanitize_filename(name: &str) -> String {
+/// Consecutive non-transition scenes grouped by source file.
+pub fn group_scenes_by_file(scenes: &[Scene]) -> Vec<(String, Vec<&Scene>)> {
+    let mut groups: Vec<(String, Vec<&Scene>)> = Vec::new();
+    for scene in scenes {
+        let Some(name) = scene.source_file() else {
+            continue;
+        };
+        match groups.last_mut() {
+            Some((existing, list)) if existing == name => list.push(scene),
+            _ => groups.push((name.to_string(), vec![scene])),
+        }
+    }
+    groups
+}
+
+pub fn sanitize_filename(name: &str) -> String {
     name.replace(['/', '\\', ' '], "_")
 }
 
@@ -423,5 +437,9 @@ diff --git a/b.rs b/b.rs
             scenes.iter().all(|s| !s.is_transition()),
             "each file stays its own clip; no crossfade between files"
         );
+        let groups = group_scenes_by_file(&scenes);
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups[0].0, "a.rs");
+        assert_eq!(groups[1].0, "b.rs");
     }
 }

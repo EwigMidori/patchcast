@@ -39,8 +39,8 @@ impl Default for RenderConfig {
     }
 }
 
-/// Render each scene to its own MP4. `output_path` is treated as a directory
-/// (a `.mp4` suffix is stripped). Transitions are skipped.
+/// Render one MP4 per changed file. `output_path` is treated as a directory
+/// (a `.mp4` suffix is stripped). File-to-file transitions are skipped.
 pub fn render_to_video(
     scenes: &[Scene],
     output_path: &Path,
@@ -50,8 +50,11 @@ pub fn render_to_video(
     let layout = Layout::new(config.font_size);
     let font = font::load_font();
 
-    let clips: Vec<&Scene> = scenes.iter().filter(|s| !s.is_transition()).collect();
-    let total_frames: u32 = clips.iter().map(|s| s.duration_frames).sum();
+    let groups = crate::scene::group_scenes_by_file(scenes);
+    let total_frames: u32 = groups
+        .iter()
+        .flat_map(|(_, list)| list.iter().map(|s| s.duration_frames))
+        .sum();
     if total_frames == 0 {
         bail!("No frames to render — the diff may be empty");
     }
@@ -69,9 +72,10 @@ pub fn render_to_video(
     );
 
     let mut written = Vec::new();
-    for (i, scene) in clips.iter().enumerate() {
-        let clip_path = out_dir.join(format!("{:02}-{}.mp4", i + 1, scene.clip_stem()));
-        encode_scene(scene, &clip_path, config, &theme, &layout, &font, &pb)?;
+    for (i, (filename, file_scenes)) in groups.iter().enumerate() {
+        let stem = crate::scene::sanitize_filename(filename);
+        let clip_path = out_dir.join(format!("{:02}-{stem}.mp4", i + 1));
+        encode_scenes(file_scenes, &clip_path, config, &theme, &layout, &font, &pb)?;
         written.push(clip_path);
     }
 
@@ -110,8 +114,8 @@ fn spawn_ffmpeg(output_path: &Path, config: &RenderConfig) -> Result<std::proces
         .context("Failed to spawn ffmpeg. Is ffmpeg installed and in PATH?")
 }
 
-fn encode_scene(
-    scene: &Scene,
+fn encode_scenes(
+    scenes: &[&Scene],
     clip_path: &Path,
     config: &RenderConfig,
     theme: &Theme,
@@ -125,22 +129,24 @@ fn encode_scene(
             .stdin
             .as_mut()
             .context("Failed to open ffmpeg stdin")?;
-        for frame_idx in 0..scene.duration_frames {
-            let frame = render_frame(
-                &scene.kind,
-                frame_idx,
-                scene.duration_frames,
-                config.width,
-                config.height,
-                theme,
-                layout,
-                font,
-                &None,
-            );
-            stdin
-                .write_all(frame.as_raw())
-                .context("Failed to write frame to ffmpeg")?;
-            pb.inc(1);
+        for scene in scenes {
+            for frame_idx in 0..scene.duration_frames {
+                let frame = render_frame(
+                    &scene.kind,
+                    frame_idx,
+                    scene.duration_frames,
+                    config.width,
+                    config.height,
+                    theme,
+                    layout,
+                    font,
+                    &None,
+                );
+                stdin
+                    .write_all(frame.as_raw())
+                    .context("Failed to write frame to ffmpeg")?;
+                pb.inc(1);
+            }
         }
     }
     let status = ffmpeg.wait().context("ffmpeg process failed")?;
