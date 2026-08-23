@@ -11,9 +11,13 @@ pub fn load_font() -> FontRef<'static> {
     FontRef::try_from_slice(FONT_TTF).expect("bundled JetBrains Mono TTF is valid")
 }
 
-/// Pixel scale matching a cell of `char_h` pixels tall.
-pub fn cell_scale(char_h: u32) -> PxScale {
-    PxScale::from(char_h as f32)
+/// Advance width and em-box height for a monospace cell at `font_size`.
+pub fn cell_metrics(font: &FontRef<'_>, font_size: u32) -> (u32, u32) {
+    let scale = PxScale::from(font_size as f32);
+    let scaled = font.as_scaled(scale);
+    let width = scaled.h_advance(font.glyph_id('M')).round().max(1.0) as u32;
+    let height = (scaled.ascent() - scaled.descent()).ceil().max(1.0) as u32;
+    (width, height)
 }
 
 /// Rasterize one glyph into `img` at cell origin `(x, y)`.
@@ -24,9 +28,9 @@ pub fn draw_glyph(
     y: u32,
     ch: char,
     fg: Color,
-    char_h: u32,
+    font_size: u32,
 ) {
-    let scale = cell_scale(char_h);
+    let scale = PxScale::from(font_size as f32);
     let scaled = font.as_scaled(scale);
     let mut glyph = font.glyph_id(ch).with_scale(scale);
     glyph.position = point(x as f32, y as f32 + scaled.ascent());
@@ -44,8 +48,10 @@ pub fn draw_glyph(
         if px < 0 || py < 0 {
             return;
         }
+        // Slight coverage boost so stems stay solid after yuv420 encoding.
+        let coverage = coverage.clamp(0.0, 1.0).powf(0.72);
         let mut color = fg;
-        color.a = (fg.a as f32 * coverage.clamp(0.0, 1.0)) as u8;
+        color.a = (fg.a as f32 * coverage) as u8;
         blend_pixel(img, px as u32, py as u32, color);
     });
 }
@@ -80,6 +86,8 @@ mod tests {
         let fg = Color::new(255, 255, 255);
         draw_glyph(&mut a, &font, 2, 2, 'A', fg, 20);
         draw_glyph(&mut i, &font, 2, 2, 'i', fg, 20);
+        let (w, h) = cell_metrics(&font, 28);
+        assert!(w >= 12 && h >= 20, "1080p cell should be reasonably large, got {w}x{h}");
         assert_ne!(a.as_raw(), i.as_raw());
         let lit = a.pixels().filter(|p| p[0] > 20).count();
         assert!(lit > 10, "glyph A should light more than a handful of pixels, got {lit}");

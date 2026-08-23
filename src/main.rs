@@ -34,7 +34,7 @@ struct Cli {
     theme: String,
 
     /// Font size in pixels.
-    #[arg(long, default_value = "14")]
+    #[arg(long, default_value = "28")]
     font_size: u32,
 
     /// Video frame rate.
@@ -42,11 +42,11 @@ struct Cli {
     fps: u32,
 
     /// Video width in pixels.
-    #[arg(long, default_value = "1280")]
+    #[arg(long, default_value = "1920")]
     width: u32,
 
     /// Video height in pixels.
-    #[arg(long, default_value = "720")]
+    #[arg(long, default_value = "1080")]
     height: u32,
 
     /// Glob pattern to include only matching files (e.g. "*.rs").

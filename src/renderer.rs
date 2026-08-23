@@ -31,10 +31,10 @@ pub struct RenderConfig {
 impl Default for RenderConfig {
     fn default() -> Self {
         Self {
-            width: 1280,
-            height: 720,
+            width: 1920,
+            height: 1080,
             fps: 30,
-            font_size: 14,
+            font_size: 28,
         }
     }
 }
@@ -47,8 +47,8 @@ pub fn render_to_video(
     config: &RenderConfig,
 ) -> Result<Vec<PathBuf>> {
     let theme = Theme::default();
-    let layout = Layout::new(config.font_size);
     let font = font::load_font();
+    let layout = Layout::from_cell(config.font_size, font::cell_metrics(&font, config.font_size));
 
     let groups = crate::scene::group_scenes_by_file(scenes);
     let total_frames: u32 = groups
@@ -102,8 +102,11 @@ fn spawn_ffmpeg(output_path: &Path, config: &RenderConfig) -> Result<std::proces
             "-i", "-",
             "-c:v", "libx264",
             "-pix_fmt", "yuv420p",
-            "-preset", "medium",
-            "-crf", "23",
+            "-preset", "slow",
+            "-crf", "16",
+            "-tune", "stillimage",
+            "-profile:v", "high",
+            "-x264-params", "deblock=-1:-1:aq-mode=3",
             "-movflags", "+faststart",
         ])
         .arg(output_path.as_os_str())
@@ -309,7 +312,7 @@ fn draw_styled_line(
         if alpha_mult < 1.0 {
             fg.a = (fg.a as f32 * alpha_mult) as u8;
         }
-        font::draw_glyph(img, font, x, y, sc.ch, fg, layout.char_height);
+        font::draw_glyph(img, font, x, y, sc.ch, fg, layout.font_size);
         x += layout.char_width;
     }
 }
@@ -698,8 +701,8 @@ mod tests {
     #[test]
     fn test_render_config_default() {
         let config = RenderConfig::default();
-        assert_eq!(config.width, 1280);
-        assert_eq!(config.height, 720);
+        assert_eq!(config.width, 1920);
+        assert_eq!(config.height, 1080);
         assert_eq!(config.fps, 30);
     }
 

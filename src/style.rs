@@ -72,6 +72,7 @@ impl Default for Theme {
 
 /// Layout constants for rendering.
 pub struct Layout {
+    pub font_size: u32,
     pub char_width: u32,
     pub char_height: u32,
     pub line_padding: u32,
@@ -84,18 +85,22 @@ pub struct Layout {
 
 impl Layout {
     pub fn new(font_size: u32) -> Self {
-        // Scale character dimensions proportionally to font size.
-        // Base: font_size=14 -> char 8x16
-        let char_width = (font_size as f32 * 0.57).round() as u32;
-        let char_height = (font_size as f32 * 1.14).round() as u32;
-        let line_padding = char_height / 4;
-        let gutter_width = char_width * 5 + 8; // 5 digit line numbers + padding
-        let left_margin = 12;
-        let top_margin = 8;
-        let header_height = char_height * 2 + 16;
-        let border_width = 3;
+        let char_width = (font_size as f32 * 0.6).round() as u32;
+        let char_height = (font_size as f32 * 1.25).round() as u32;
+        Self::from_cell(font_size, (char_width.max(1), char_height.max(1)))
+    }
+
+    /// Cell size from the bundled font's advance / em box.
+    pub fn from_cell(font_size: u32, (char_width, char_height): (u32, u32)) -> Self {
+        let line_padding = (font_size as f32 * 0.28).round() as u32;
+        let gutter_width = char_width * 5 + font_size / 2;
+        let left_margin = (font_size as f32 * 0.7).round() as u32;
+        let top_margin = (font_size as f32 * 0.4).round() as u32;
+        let header_height = char_height * 2 + font_size / 2;
+        let border_width = (font_size / 8).max(3);
 
         Self {
+            font_size,
             char_width,
             char_height,
             line_padding,
@@ -176,9 +181,9 @@ mod tests {
     #[test]
     fn test_visible_lines() {
         let layout = Layout::new(14);
-        let lines = layout.visible_lines(720);
-        assert!(lines > 10, "Should fit at least 10 lines in 720p");
-        assert!(lines < 100, "Should not exceed 100 lines in 720p");
+        let lines = layout.visible_lines(1080);
+        assert!(lines > 10, "Should fit at least 10 lines in 1080p");
+        assert!(lines < 100, "Should not exceed 100 lines in 1080p");
     }
 
     #[test]
